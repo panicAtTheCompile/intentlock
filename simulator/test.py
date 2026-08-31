@@ -1,0 +1,2 @@
+print("INTENTLOCK is alive.")
+
