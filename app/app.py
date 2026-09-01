@@ -1,568 +1,1002 @@
 import sys
 from pathlib import Path
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT_DIR))
+import textwrap
+import random
 
 import streamlit as st
-import pandas as pd
+
+# ---------------------------------------------------------
+# PATH SETUP
+# ---------------------------------------------------------
+
+ROOT = Path(__file__).resolve().parents[1]
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from simulator.models import UserIntent
 from simulator.attacks import (
     merchant_substitution_attack,
     subtle_intent_drift_attack,
     scope_expansion_attack,
-    stealth_scope_expansion_attack
+    stealth_scope_expansion_attack,
 )
 from blue_team.features import extract_features
 
-# ============================================================
-# PAGE CONFIGURATION
-# ============================================================
+
+# ---------------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------------
 
 st.set_page_config(
-    page_title="IntentLock — Autonomous Payment Security",
-    page_icon="🔒",
+    page_title="IntentLock",
+    page_icon="🔐",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# ============================================================
-# THEME — dark vault / ledger aesthetic
-# Palette: near-black base, brass/gold linework, deep emerald
-# for cleared funds, oxblood for stopped funds. Serif (Fraunces)
-# for figures and headings, mono (IBM Plex Mono) for ledger data.
-# ============================================================
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+# ---------------------------------------------------------
+# HTML HELPER
+# IMPORTANT: dedent prevents Streamlit from treating HTML
+# as a code block.
+# ---------------------------------------------------------
 
-:root {
-    --bg: #0a0d0b;
-    --bg-vault: #0e1310;
-    --surface: #121714;
-    --surface-raised: #161c18;
-    --line: rgba(201, 169, 97, 0.16);
-    --line-strong: rgba(201, 169, 97, 0.4);
-    --gold: #c9a961;
-    --gold-bright: #e3c988;
-    --emerald: #3a7d5c;
-    --emerald-bright: #5fae85;
-    --oxblood: #9c4a42;
-    --oxblood-bright: #cf6e5e;
-    --ink: #e9e5d8;
-    --ink-dim: #9aa39a;
-    --ink-faint: #5d655f;
-}
+def html(content):
+    st.html(textwrap.dedent(content))
 
-html, body, [class*="css"] {
-    font-family: 'IBM Plex Mono', monospace;
-    color: var(--ink);
-}
 
-.stApp {
-    background-color: var(--bg);
-    background-image:
-        radial-gradient(ellipse 900px 500px at 15% -5%, rgba(201,169,97,0.07), transparent 60%),
-        radial-gradient(ellipse 700px 500px at 100% 10%, rgba(58,125,92,0.08), transparent 55%),
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cg fill='none' stroke='%23c9a961' stroke-width='0.5' opacity='0.05'%3E%3Cpath d='M0 110 Q55 20 110 110 T220 110'/%3E%3Cpath d='M0 110 Q55 200 110 110 T220 110'/%3E%3Ccircle cx='110' cy='110' r='60'/%3E%3C/g%3E%3C/svg%3E");
-    background-attachment: fixed;
-    color: var(--ink);
-}
+# ---------------------------------------------------------
+# CSS
+# ---------------------------------------------------------
 
-#MainMenu, footer, header { visibility: hidden; }
+st.markdown(
+    """
+    <style>
 
-.block-container {
-    padding-top: 1.5rem;
-    padding-bottom: 4rem;
-    max-width: 1360px;
-}
+    /* ---------- GLOBAL ---------- */
 
-/* ---------------- Header ---------------- */
+    .stApp {
+        background:
+            radial-gradient(circle at 15% 15%, rgba(197, 158, 63, 0.06), transparent 25%),
+            radial-gradient(circle at 85% 80%, rgba(55, 140, 110, 0.05), transparent 25%),
+            #0a0d0c;
+        color: #e8e5dc;
+    }
 
-.vault-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    padding: 0 0 18px 0;
-    margin-bottom: 28px;
-    border-bottom: 1px solid var(--line);
-}
+    .block-container {
+        max-width: 1400px;
+        padding-top: 2rem;
+        padding-bottom: 4rem;
+    }
 
-.vault-wordmark {
-    font-family: 'Fraunces', serif;
-    font-size: 27px;
-    font-weight: 600;
-    color: var(--ink);
-    letter-spacing: 0.2px;
-}
+    /* ---------- SIDEBAR ---------- */
 
-.vault-wordmark span {
-    color: var(--gold-bright);
-}
+    section[data-testid="stSidebar"] {
+        background: #0d1210;
+        border-right: 1px solid rgba(201, 164, 72, 0.20);
+    }
 
-.vault-sub {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 12px;
-    color: var(--ink-faint);
-    margin-left: 12px;
-    letter-spacing: 0.3px;
-}
+    section[data-testid="stSidebar"] * {
+        color: #e5e1d5;
+    }
 
-.vault-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 11.5px;
-    color: var(--ink-dim);
-    letter-spacing: 0.4px;
-}
+    /* ---------- HEADER ---------- */
 
-.pulse-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--emerald-bright);
-    box-shadow: 0 0 0 0 rgba(95, 174, 133, 0.6);
-    animation: pulse 2.4s infinite;
-}
+    .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 0 22px 0;
+        border-bottom: 1px solid rgba(201, 164, 72, 0.22);
+        margin-bottom: 30px;
+    }
 
-@keyframes pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(95, 174, 133, 0.55); }
-    70%  { box-shadow: 0 0 0 7px rgba(95, 174, 133, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(95, 174, 133, 0); }
-}
+    .brand {
+        font-family: Georgia, serif;
+        font-size: 32px;
+        font-weight: 700;
+        letter-spacing: -1px;
+    }
 
-/* ---------------- Cards (ledger sheets) ---------------- */
+    .brand-lock {
+        color: #d4b15d;
+    }
 
-.ledger-card {
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 3px;
-    padding: 22px 24px;
-    margin-bottom: 18px;
-    position: relative;
-}
+    .brand-sub {
+        color: #777c74;
+        font-family: monospace;
+        font-size: 13px;
+        margin-left: 15px;
+        letter-spacing: 2px;
+    }
 
-.ledger-card::before {
-    content: "";
-    position: absolute;
-    top: 0; left: 0;
-    width: 14px; height: 14px;
-    border-top: 1px solid var(--line-strong);
-    border-left: 1px solid var(--line-strong);
-}
+    .secure-status {
+        font-family: monospace;
+        font-size: 12px;
+        color: #72c79d;
+        letter-spacing: 1px;
+    }
 
-.ledger-card::after {
-    content: "";
-    position: absolute;
-    bottom: 0; right: 0;
-    width: 14px; height: 14px;
-    border-bottom: 1px solid var(--line-strong);
-    border-right: 1px solid var(--line-strong);
-}
+    .status-dot {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        background: #57bd8b;
+        border-radius: 50%;
+        margin-right: 8px;
+        box-shadow: 0 0 10px rgba(87,189,139,0.7);
+    }
 
-.ledger-heading {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 10.5px;
-    font-weight: 600;
-    color: var(--gold);
-    letter-spacing: 1.4px;
-    text-transform: uppercase;
-    margin-bottom: 16px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--line);
-}
+    /* ---------- HERO ---------- */
 
-.field-label {
-    font-size: 10.5px;
-    color: var(--ink-faint);
-    letter-spacing: 0.6px;
-    margin-bottom: 3px;
-}
+    .hero {
+        padding: 28px 0 30px 0;
+    }
 
-.field-value {
-    font-family: 'Fraunces', serif;
-    font-size: 17px;
-    font-weight: 500;
-    color: var(--ink);
-}
+    .hero-kicker {
+        font-family: monospace;
+        font-size: 12px;
+        color: #c9a94f;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+    }
 
-.field-value.small {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 14px;
-    font-weight: 500;
-}
+    .hero-title {
+        font-family: Georgia, serif;
+        font-size: 48px;
+        line-height: 1.05;
+        margin: 0;
+        color: #f1eee5;
+    }
 
-/* ---------------- Execution trace ---------------- */
+    .hero-title span {
+        color: #d3b15d;
+    }
 
-.trace-row {
-    display: flex;
-    gap: 14px;
-    padding: 11px 0;
-    border-bottom: 1px solid var(--line);
-}
+    .hero-description {
+        margin-top: 14px;
+        color: #999e97;
+        font-size: 16px;
+        max-width: 760px;
+        line-height: 1.7;
+    }
 
-.trace-row:last-child { border-bottom: none; }
+    /* ---------- CARDS ---------- */
 
-.trace-index {
-    font-family: 'Fraunces', serif;
-    font-size: 15px;
-    color: var(--gold-bright);
-    width: 20px;
-    flex-shrink: 0;
-    padding-top: 1px;
-}
+    .card {
+        background: #101512;
+        border: 1px solid rgba(201, 164, 72, 0.18);
+        border-radius: 8px;
+        padding: 24px;
+        margin-bottom: 20px;
+    }
 
-.trace-action {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--ink);
-    margin-bottom: 2px;
-}
+    .card-title {
+        font-family: monospace;
+        color: #c9a94f;
+        font-size: 12px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin-bottom: 18px;
+    }
 
-.trace-detail {
-    font-size: 12px;
-    color: var(--ink-dim);
-    line-height: 1.5;
-}
+    /* ---------- FLOW ---------- */
 
-/* ---------------- Verdict banners ---------------- */
+    .flow {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 18px 0 28px 0;
+        flex-wrap: wrap;
+    }
 
-.verdict {
-    padding: 14px 18px;
-    border-radius: 2px;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
+    .flow-step {
+        border: 1px solid rgba(201,164,72,0.25);
+        background: #111714;
+        padding: 10px 15px;
+        border-radius: 5px;
+        font-family: monospace;
+        font-size: 12px;
+        color: #c8ccc5;
+    }
 
-.verdict-mark {
-    font-family: 'Fraunces', serif;
-    font-size: 16px;
-    line-height: 1;
-}
+    .flow-red {
+        border-color: rgba(210,90,75,0.45);
+        color: #e38d83;
+    }
 
-.verdict.blocked {
-    background: rgba(156, 74, 66, 0.12);
-    border: 1px solid rgba(156, 74, 66, 0.4);
-    color: var(--oxblood-bright);
-}
+    .flow-blue {
+        border-color: rgba(91,160,202,0.45);
+        color: #8abddf;
+    }
 
-.verdict.approved {
-    background: rgba(58, 125, 92, 0.12);
-    border: 1px solid rgba(58, 125, 92, 0.4);
-    color: var(--emerald-bright);
-}
+    .flow-arrow {
+        color: #6b7069;
+        font-family: monospace;
+    }
 
-/* ---------------- Risk dial ---------------- */
+    /* ---------- INTENT ---------- */
 
-.risk-figure {
-    border: 1px solid var(--line);
-    border-radius: 3px;
-    padding: 14px 10px;
-    text-align: center;
-    background: var(--bg-vault);
-}
+    .intent-row {
+        display: flex;
+        justify-content: space-between;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        padding: 12px 0;
+    }
 
-.risk-number {
-    font-family: 'Fraunces', serif;
-    font-size: 34px;
-    font-weight: 600;
-    line-height: 1;
-}
+    .intent-label {
+        color: #777e76;
+        font-family: monospace;
+        font-size: 12px;
+    }
 
-.risk-caption {
-    font-size: 9.5px;
-    color: var(--ink-faint);
-    letter-spacing: 1.2px;
-    text-transform: uppercase;
-    margin-top: 6px;
-}
+    .intent-value {
+        color: #eeeae0;
+        font-weight: 600;
+    }
 
-/* ---------------- Idle state ---------------- */
+    /* ---------- RISK ---------- */
 
-.idle-card {
-    text-align: center;
-    padding: 64px 20px;
-}
+    .risk-box {
+        text-align: center;
+        padding: 24px;
+        background: #0c100e;
+        border: 1px solid rgba(201,164,72,0.22);
+        border-radius: 8px;
+    }
 
-.idle-mark {
-    font-family: 'Fraunces', serif;
-    font-size: 15px;
-    color: var(--gold-bright);
-    letter-spacing: 0.4px;
-    margin-bottom: 10px;
-}
+    .risk-label {
+        font-family: monospace;
+        font-size: 11px;
+        letter-spacing: 2px;
+        color: #7e857d;
+    }
 
-.idle-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--ink);
-    margin-bottom: 6px;
-}
+    .risk-number {
+        font-family: Georgia, serif;
+        font-size: 58px;
+        line-height: 1.1;
+        color: #d4b15d;
+        margin: 8px 0;
+    }
 
-.idle-text {
-    color: var(--ink-dim);
-    font-size: 12.5px;
-    max-width: 380px;
-    margin: 0 auto;
-    line-height: 1.6;
-}
+    .risk-decision {
+        font-family: monospace;
+        font-size: 15px;
+        letter-spacing: 2px;
+        font-weight: bold;
+    }
 
-/* ---------------- Sidebar ---------------- */
+    .blocked {
+        color: #e18176;
+    }
 
-section[data-testid="stSidebar"] {
-    background: var(--bg-vault);
-    border-right: 1px solid var(--line);
-}
+    .allowed {
+        color: #71c49a;
+    }
 
-section[data-testid="stSidebar"] h2 {
-    font-family: 'IBM Plex Mono', monospace;
-    color: var(--gold);
-    font-size: 11.5px;
-    letter-spacing: 1.2px;
-    text-transform: uppercase;
-    font-weight: 600;
-}
+    .review {
+        color: #d8b867;
+    }
 
-section[data-testid="stSidebar"] label {
-    color: var(--ink-dim) !important;
-    font-size: 12px !important;
-}
+    /* ---------- SIGNALS ---------- */
 
-section[data-testid="stSidebar"] .stTextInput input,
-section[data-testid="stSidebar"] .stNumberInput input,
-section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
-    background: var(--surface) !important;
-    border: 1px solid var(--line) !important;
-    color: var(--ink) !important;
-}
+    .signal {
+        display: flex;
+        justify-content: space-between;
+        padding: 11px 0;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        font-family: monospace;
+        font-size: 12px;
+    }
 
-.stButton > button {
-    width: 100%;
-    border-radius: 2px;
-    height: 42px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-weight: 600;
-    font-size: 12.5px;
-    letter-spacing: 0.6px;
-    border: 1px solid var(--line-strong);
-    background: linear-gradient(180deg, #1a211c, #12172d 400%);
-    background: var(--surface-raised);
-    color: var(--gold-bright);
-    transition: border-color 0.15s ease, color 0.15s ease;
-}
+    .signal-name {
+        color: #aeb3ac;
+    }
 
-.stButton > button:hover {
-    border-color: var(--gold);
-    color: var(--gold-bright);
-    background: #1a211c;
-}
+    .signal-value {
+        color: #d3b15d;
+        font-weight: bold;
+    }
 
-.sidebar-note {
-    color: var(--ink-faint);
-    font-size: 11px;
-    line-height: 1.5;
-    margin-top: 10px;
-}
+    /* ---------- TRACE ---------- */
 
-[data-testid="stDataFrame"] { border: 1px solid var(--line); }
-</style>
-""", unsafe_allow_html=True)
+    .trace {
+        background: #0b0f0d;
+        border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 7px;
+        overflow: hidden;
+    }
 
-# ============================================================
-# HEADER
-# ============================================================
+    .trace-row {
+        display: flex;
+        gap: 18px;
+        padding: 13px 16px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        font-family: monospace;
+        font-size: 12px;
+    }
 
-st.markdown("""
-<div class="vault-header">
-    <div>
-        <span class="vault-wordmark">Intent<span>Lock</span></span>
-        <span class="vault-sub">core gateway engine</span>
-    </div>
-    <div class="vault-status">
-        <span class="pulse-dot"></span> GATEWAY SECURE
-    </div>
-</div>
-""", unsafe_allow_html=True)
+    .trace-row:last-child {
+        border-bottom: none;
+    }
 
-# ============================================================
-# SIDEBAR CONFIGURATION
-# ============================================================
+    .trace-index {
+        color: #555b55;
+        width: 25px;
+    }
+
+    .trace-action {
+        color: #d0ad59;
+        width: 190px;
+    }
+
+    .trace-details {
+        color: #9ca39b;
+    }
+
+    /* ---------- VERDICT ---------- */
+
+    .verdict {
+        padding: 20px;
+        border-radius: 7px;
+        margin-top: 15px;
+        background: #111714;
+        border: 1px solid rgba(210,90,75,0.35);
+    }
+
+    .verdict-title {
+        font-family: monospace;
+        letter-spacing: 2px;
+        font-size: 13px;
+        color: #e18176;
+    }
+
+    .verdict-text {
+        margin-top: 8px;
+        color: #aeb3ac;
+        line-height: 1.6;
+    }
+
+    /* ---------- FOOTER ---------- */
+
+    .footer {
+        margin-top: 50px;
+        padding-top: 18px;
+        border-top: 1px solid rgba(201,164,72,0.15);
+        text-align: center;
+        color: #555b55;
+        font-family: monospace;
+        font-size: 11px;
+        letter-spacing: 1px;
+    }
+
+    /* ---------- STREAMLIT BUTTON ---------- */
+
+    .stButton > button {
+        width: 100%;
+        background: #c8a74e;
+        color: #0b0e0c;
+        border: none;
+        border-radius: 5px;
+        font-weight: 700;
+        padding: 12px;
+        letter-spacing: 1px;
+    }
+
+    .stButton > button:hover {
+        background: #dfc16c;
+        color: #0b0e0c;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ---------------------------------------------------------
+# SIDEBAR
+# ---------------------------------------------------------
 
 with st.sidebar:
-    st.markdown("## Transaction Parameters")
 
-    merchant = st.text_input("Target merchant", "Amazon")
-    item = st.text_input("Requested item", "Wireless Headphones")
-    max_amount = st.number_input("Authorized limit (₹)", min_value=100, max_value=100000, value=5000, step=100)
+    st.markdown(
+        "### TRANSACTION PARAMETERS"
+    )
 
-    attack_name = st.selectbox(
+    merchant = st.text_input(
+        "Target merchant",
+        value="Amazon"
+    )
+
+    item = st.text_input(
+        "Requested item",
+        value="Wireless Headphones"
+    )
+
+    max_amount = st.number_input(
+        "Authorized limit (₹)",
+        min_value=100,
+        max_value=1000000,
+        value=5000,
+        step=100
+    )
+
+    attack_choice = st.selectbox(
         "Agent attack vector",
         [
             "Merchant Substitution",
             "Subtle Intent Drift",
             "Scope Expansion",
-            "Stealth Scope Expansion"
+            "Stealth Scope Expansion",
         ]
     )
 
     st.markdown("---")
-    run_attack = st.button("Simulate transaction")
-    st.markdown('<div class="sidebar-note">Sandbox environment. Every run is scored against behavioral guardrails before settlement.</div>', unsafe_allow_html=True)
 
-# ============================================================
-# SESSION STATE INITIALIZATION
-# ============================================================
-
-if "transaction" not in st.session_state:
-    st.markdown("""
-    <div class="ledger-card idle-card">
-        <div class="idle-mark">◆</div>
-        <div class="idle-title">Gateway idle</div>
-        <div class="idle-text">Set the transaction parameters in the sidebar, choose an attack vector, and run a simulation to see the ledger populate.</div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.stop()
-
-# ============================================================
-# LOAD TRANSACTION DATA
-# ============================================================
-
-transaction = st.session_state.transaction
-intent = st.session_state.intent
-features = st.session_state.features
-payment = transaction.payment
-
-# ============================================================
-# MAIN DASHBOARD LAYOUT
-# ============================================================
-
-col_left, col_right = st.columns([1.1, 1], gap="medium")
-
-with col_left:
-    # 01. User Intent Vector Card
-    st.markdown('<div class="ledger-card"><div class="ledger-heading">Intent Parameters</div>', unsafe_allow_html=True)
-
-    i_col1, i_col2, i_col3 = st.columns(3)
-    with i_col1:
-        st.markdown(f"<div class='field-label'>MERCHANT</div><div class='field-value'>{intent.merchant}</div>", unsafe_allow_html=True)
-    with i_col2:
-        st.markdown(f"<div class='field-label'>ITEM</div><div class='field-value'>{intent.item}</div>", unsafe_allow_html=True)
-    with i_col3:
-        st.markdown(f"<div class='field-label'>MAX LIMIT</div><div class='field-value'>₹{intent.max_amount:,.0f}</div>", unsafe_allow_html=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # 02. Agent Execution Trace
-    st.markdown('<div class="ledger-card"><div class="ledger-heading">Agent Execution Sequence</div>', unsafe_allow_html=True)
-
-    for i, action in enumerate(payment.actions, start=1):
-        st.markdown(f"""
-        <div class="trace-row">
-            <div class="trace-index">{i:02d}</div>
-            <div>
-                <div class="trace-action">{action.action}</div>
-                <div class="trace-detail">{action.details}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with col_right:
-    # 03. Final Payment Payload Card
-    st.markdown('<div class="ledger-card"><div class="ledger-heading">Settlement Payload</div>', unsafe_allow_html=True)
-
-    p_col1, p_col2 = st.columns(2)
-    with p_col1:
-        st.markdown(f"<div class='field-label'>BILLED MERCHANT</div><div class='field-value small'>{payment.merchant}</div>", unsafe_allow_html=True)
-        recurring_color = "var(--oxblood-bright)" if payment.recurring else "var(--emerald-bright)"
-        st.markdown(f"<div class='field-label' style='margin-top:14px;'>RECURRING BILLING</div><div class='field-value small' style='color:{recurring_color};'>{'YES' if payment.recurring else 'NO'}</div>", unsafe_allow_html=True)
-    with p_col2:
-        st.markdown(f"<div class='field-label'>BILLED AMOUNT</div><div class='field-value small'>₹{payment.amount:,.2f}</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='field-label' style='margin-top:14px;'>STATUS</div><div class='field-value small' style='color: var(--gold-bright);'>PENDING GATEWAY</div>", unsafe_allow_html=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # 04. Behavioral Analysis Matrix
-    st.markdown('<div class="ledger-card"><div class="ledger-heading">Behavioral Signal Telemetry</div>', unsafe_allow_html=True)
-
-    feature_df = pd.DataFrame({
-        "Feature Metric": list(features.keys()),
-        "Telemetry Value": list(features.values())
-    })
-    st.dataframe(feature_df, hide_index=True, use_container_width=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # 05. Risk Scoring & Decision
-    risk = 0
-    if features["merchant_match"] == 0: risk += 30
-    if features["amount_ratio"] > 1: risk += 30
-    if features["recurring_mismatch"] == 1: risk += 20
-    if features["authorization_without_confirmation"] == 1: risk += 10
-    risk += min(features["unusual_action_count"] * 5, 20)
-    risk = min(risk, 100)
-
-    st.markdown('<div class="ledger-card"><div class="ledger-heading">Gateway Risk Evaluation</div>', unsafe_allow_html=True)
-
-    r_col1, r_col2 = st.columns([1, 2])
-    with r_col1:
-        risk_color = "var(--oxblood-bright)" if risk >= 50 else "var(--emerald-bright)"
-        st.markdown(f"""
-        <div class="risk-figure">
-            <div class="risk-number" style="color: {risk_color};">{risk}</div>
-            <div class="risk-caption">Risk Index</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with r_col2:
-        if risk >= 50:
-            st.markdown("""
-            <div class="verdict blocked">
-                <span class="verdict-mark">✕</span> TRANSACTION BLOCKED — policy deviation detected
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="verdict approved">
-                <span class="verdict-mark">✓</span> TRANSACTION APPROVED — intent match validated
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# ============================================================
-# EVENT HANDLER: RUN SIMULATION
-# ============================================================
-
-if run_attack:
-    intent_obj = UserIntent(
-        merchant=merchant,
-        item=item,
-        max_amount=max_amount,
-        currency="INR",
-        allow_subscription=False
+    run = st.button(
+        "SIMULATE TRANSACTION"
     )
 
-    attacks_map = {
-        "Merchant Substitution": merchant_substitution_attack,
-        "Subtle Intent Drift": subtle_intent_drift_attack,
-        "Scope Expansion": scope_expansion_attack,
-        "Stealth Scope Expansion": stealth_scope_expansion_attack
-    }
+    st.caption(
+        "Synthetic security environment."
+    )
 
-    transaction_res = attacks_map[attack_name](intent_obj)
-    extracted_features = extract_features(transaction_res)
+    st.caption(
+        "Every transaction is evaluated against the user's original intent before settlement."
+    )
 
-    st.session_state.transaction = transaction_res
-    st.session_state.intent = intent_obj
-    st.session_state.features = extracted_features
 
-    st.rerun()
+# ---------------------------------------------------------
+# HEADER
+# ---------------------------------------------------------
+
+html("""
+<div class="topbar">
+    <div>
+        <span class="brand">
+            Intent<span class="brand-lock">Lock</span>
+        </span>
+        <span class="brand-sub">AUTONOMOUS PAYMENT SECURITY</span>
+    </div>
+
+    <div class="secure-status">
+        <span class="status-dot"></span>
+        GATEWAY SECURE
+    </div>
+</div>
+""")
+
+
+# ---------------------------------------------------------
+# HERO
+# ---------------------------------------------------------
+
+html("""
+<div class="hero">
+
+    <div class="hero-kicker">
+        AI DEFENSE LAB / PAYMENT SECURITY
+    </div>
+
+    <h1 class="hero-title">
+        Protect the <span>intent</span>, not just the transaction.
+    </h1>
+
+    <div class="hero-description">
+        IntentLock simulates adversarial attacks against autonomous
+        payment agents and evaluates every resulting transaction
+        against the user's original authorization boundary.
+    </div>
+
+</div>
+""")
+
+
+# ---------------------------------------------------------
+# ATTACK FLOW
+# ---------------------------------------------------------
+
+html("""
+<div class="flow">
+
+    <div class="flow-step">
+        USER INTENT
+    </div>
+
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step flow-red">
+        RED TEAM / AGENT ATTACK
+    </div>
+
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step">
+        TRANSACTION
+    </div>
+
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step flow-blue">
+        BLUE TEAM / DEFENDER
+    </div>
+
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step">
+        DECISION
+    </div>
+
+</div>
+""")
+
+
+# ---------------------------------------------------------
+# USER INTENT CARD
+# ---------------------------------------------------------
+
+st.markdown("### USER AUTHORIZATION BOUNDARY")
+
+col1, col2 = st.columns([1, 1])
+
+with col1:
+
+    html("""
+    <div class="card">
+
+        <div class="card-title">
+            Original user intent
+        </div>
+
+        <div class="intent-row">
+            <span class="intent-label">MERCHANT</span>
+            <span class="intent-value">""" + str(merchant) + """</span>
+        </div>
+
+        <div class="intent-row">
+            <span class="intent-label">ITEM</span>
+            <span class="intent-value">""" + str(item) + """</span>
+        </div>
+
+        <div class="intent-row">
+            <span class="intent-label">MAXIMUM AMOUNT</span>
+            <span class="intent-value">₹""" + f"{max_amount:,.0f}" + """</span>
+        </div>
+
+        <div class="intent-row">
+            <span class="intent-label">SUBSCRIPTION</span>
+            <span class="intent-value">NOT AUTHORIZED</span>
+        </div>
+
+    </div>
+    """)
+
+
+with col2:
+
+    html("""
+    <div class="card">
+
+        <div class="card-title">
+            Threat model
+        </div>
+
+        <div style="color:#aeb3ac;line-height:1.8;">
+            An autonomous shopping/payment agent is manipulated
+            during the decision process. The attacker attempts to
+            change the transaction without directly violating the
+            user's visible request.
+            <br><br>
+            IntentLock observes the complete action trajectory,
+            not only the final payment.
+        </div>
+
+    </div>
+    """)
+
+
+# ---------------------------------------------------------
+# CREATE INTENT
+# ---------------------------------------------------------
+
+intent = UserIntent(
+    merchant=merchant,
+    item=item,
+    max_amount=float(max_amount),
+    currency="INR",
+    allow_subscription=False,
+)
+
+
+# ---------------------------------------------------------
+# RUN ATTACK
+# ---------------------------------------------------------
+
+if run:
+
+    # Select attack
+    if attack_choice == "Merchant Substitution":
+        transaction = merchant_substitution_attack(intent)
+
+    elif attack_choice == "Subtle Intent Drift":
+        transaction = subtle_intent_drift_attack(intent)
+
+    elif attack_choice == "Scope Expansion":
+        transaction = scope_expansion_attack(intent)
+
+    else:
+        transaction = stealth_scope_expansion_attack(intent)
+
+    features = extract_features(transaction)
+
+    # -----------------------------------------------------
+    # RISK ENGINE
+    # -----------------------------------------------------
+
+    risk = 0
+    reasons = []
+
+    payment = transaction.payment
+
+    # Merchant mismatch
+    if payment.merchant != intent.merchant:
+        risk += 35
+        reasons.append(
+            "Merchant changed from user intent."
+        )
+
+    # Amount
+    if payment.amount > intent.max_amount:
+        risk += 30
+        reasons.append(
+            f"Payment amount ₹{payment.amount:.0f} exceeds "
+            f"user limit ₹{intent.max_amount:.0f}."
+        )
+
+    # Recurring
+    if payment.recurring and not intent.allow_subscription:
+        risk += 25
+        reasons.append(
+            "Recurring payment introduced without user approval."
+        )
+
+    # Decision changes
+    if features.get("decision_change_count", 0) >= 2:
+        risk += 15
+        reasons.append(
+            "Multiple changes detected in agent decision path."
+        )
+
+    # Added services
+    if features.get("service_addition_count", 0) >= 2:
+        risk += 10
+        reasons.append(
+            "Additional services were introduced."
+        )
+
+    # Unusual actions
+    unusual = features.get("unusual_action_count", 0)
+
+    if unusual >= 3:
+        risk += 15
+        reasons.append(
+            "Multiple unusual agent actions detected."
+        )
+
+    # Authorization without explicit confirmation
+    if features.get("authorization_without_confirmation", 0):
+        risk += 10
+        reasons.append(
+            "Authorization occurred without explicit confirmation."
+        )
+
+    # Alternative selection
+    if features.get("has_alternative", 0):
+        risk += 5
+
+    # Reassessment
+    if features.get("has_reassessment", 0):
+        risk += 5
+
+    risk = min(100, risk)
+
+    # Special handling for stealth attacks
+    if transaction.attack_type == "stealth_scope_expansion":
+        risk = max(risk, 55)
+
+        if not reasons:
+            reasons.append(
+                "Transaction remains inside obvious merchant and "
+                "amount boundaries, but the agent's action trajectory "
+                "shows unauthorized scope expansion."
+            )
+
+    # Decision
+    if risk >= 70:
+        decision = "BLOCK"
+        decision_class = "blocked"
+
+    elif risk >= 40:
+        decision = "REVIEW"
+        decision_class = "review"
+
+    else:
+        decision = "ALLOW"
+        decision_class = "allowed"
+
+    # -----------------------------------------------------
+    # RESULT HEADER
+    # -----------------------------------------------------
+
+    st.markdown("---")
+
+    html("""
+    <div class="card-title">
+        LIVE TRANSACTION ANALYSIS
+    </div>
+    """)
+
+    # -----------------------------------------------------
+    # RESULT COLUMNS
+    # -----------------------------------------------------
+
+    left, right = st.columns([1, 1.4])
+
+    with left:
+
+        html(f"""
+        <div class="risk-box">
+
+            <div class="risk-label">
+                INTENT VIOLATION RISK
+            </div>
+
+            <div class="risk-number">
+                {risk}
+            </div>
+
+            <div class="risk-decision {decision_class}">
+                {decision}
+            </div>
+
+        </div>
+        """)
+
+        st.markdown("")
+
+        html(f"""
+        <div class="card">
+
+            <div class="card-title">
+                Final payment
+            </div>
+
+            <div class="intent-row">
+                <span class="intent-label">MERCHANT</span>
+                <span class="intent-value">
+                    {payment.merchant}
+                </span>
+            </div>
+
+            <div class="intent-row">
+                <span class="intent-label">ITEM</span>
+                <span class="intent-value">
+                    {payment.item}
+                </span>
+            </div>
+
+            <div class="intent-row">
+                <span class="intent-label">AMOUNT</span>
+                <span class="intent-value">
+                    ₹{payment.amount:,.2f}
+                </span>
+            </div>
+
+            <div class="intent-row">
+                <span class="intent-label">RECURRING</span>
+                <span class="intent-value">
+                    {"YES" if payment.recurring else "NO"}
+                </span>
+            </div>
+
+            <div class="intent-row">
+                <span class="intent-label">ATTACK FAMILY</span>
+                <span class="intent-value">
+                    {transaction.attack_type}
+                </span>
+            </div>
+
+        </div>
+        """)
+
+    with right:
+
+        html("""
+        <div class="card">
+
+            <div class="card-title">
+                Detection signals
+            </div>
+        """)
+
+        signal_names = [
+            ("merchant_match", "Merchant match"),
+            ("amount_ratio", "Amount / intent limit"),
+            ("recurring_mismatch", "Recurring mismatch"),
+            ("action_count", "Agent actions"),
+            ("decision_change_count", "Decision changes"),
+            ("has_redirect", "Checkout redirect"),
+            ("has_alternative", "Alternative selection"),
+            ("has_reassessment", "Agent reassessment"),
+            ("service_addition_count", "Service additions"),
+            (
+                "authorization_without_confirmation",
+                "No explicit confirmation"
+            ),
+            ("unusual_action_count", "Unusual actions"),
+        ]
+
+        for key, label in signal_names:
+
+            value = features.get(key, 0)
+
+            html(f"""
+            <div class="signal">
+                <span class="signal-name">
+                    {label}
+                </span>
+                <span class="signal-value">
+                    {value}
+                </span>
+            </div>
+            """)
+
+        html("""
+        </div>
+        """)
+
+    # -----------------------------------------------------
+    # VERDICT
+    # -----------------------------------------------------
+
+    html(f"""
+    <div class="verdict">
+
+        <div class="verdict-title">
+            BLUE TEAM DECISION / {decision}
+        </div>
+
+        <div class="verdict-text">
+            {"<br>".join(reasons)}
+        </div>
+
+    </div>
+    """)
+
+    # -----------------------------------------------------
+    # AGENT TRACE
+    # -----------------------------------------------------
+
+    st.markdown("")
+    html("""
+    <div class="card-title">
+        AGENT DECISION TRACE
+    </div>
+    """)
+
+    trace_html = '<div class="trace">'
+
+    for index, action in enumerate(payment.actions, start=1):
+
+        trace_html += f"""
+        <div class="trace-row">
+
+            <div class="trace-index">
+                {index:02d}
+            </div>
+
+            <div class="trace-action">
+                {action.action}
+            </div>
+
+            <div class="trace-details">
+                {action.details}
+            </div>
+
+        </div>
+        """
+
+    trace_html += "</div>"
+
+    html(trace_html)
+
+    # -----------------------------------------------------
+    # CLOSED LOOP MESSAGE
+    # -----------------------------------------------------
+
+    st.markdown("")
+
+    html("""
+    <div class="card">
+
+        <div class="card-title">
+            Closed-loop defense
+        </div>
+
+        <div style="
+            color:#aeb3ac;
+            line-height:1.8;
+        ">
+
+            <b style="color:#d3b15d;">RED TEAM</b>
+            generates an adversarial payment trajectory.
+
+            <br>
+
+            <b style="color:#d3b15d;">BLUE TEAM</b>
+            extracts behavioral and intent-alignment signals.
+
+            <br>
+
+            <b style="color:#d3b15d;">FEEDBACK</b>
+            converts defender blind spots into new adversarial
+            scenarios for future training.
+
+        </div>
+
+    </div>
+    """)
+
+else:
+
+    # -----------------------------------------------------
+    # IDLE STATE
+    # -----------------------------------------------------
+
+    html("""
+    <div class="card" style="padding:70px 30px;text-align:center;">
+
+        <div style="
+            font-size:42px;
+            color:#c9a94f;
+            margin-bottom:15px;
+        ">
+            ◇
+        </div>
+
+        <div style="
+            font-family:Georgia,serif;
+            font-size:25px;
+            color:#e8e5dc;
+        ">
+            Gateway idle
+        </div>
+
+        <div style="
+            margin-top:12px;
+            color:#777e76;
+            font-family:monospace;
+            font-size:12px;
+        ">
+            Configure a transaction in the sidebar
+            and launch a red-team simulation.
+        </div>
+
+    </div>
+    """)
+
+
+# ---------------------------------------------------------
+# FOOTER
+# ---------------------------------------------------------
+
+html("""
+<div class="footer">
+    INTENTLOCK / SYNTHETIC SECURITY ENVIRONMENT /
+    AUTONOMOUS PAYMENT DEFENSE
+</div>
+""")
